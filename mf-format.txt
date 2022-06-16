@@ -9,7 +9,6 @@ Repeats for total number of characters.
 The end of this table is marked by the glyph_file_offset of the first valid character in the table.
 
 Glyph:
-	--padding to align to nearest 4 bytes goes here if necessary--
 	n_shapes    | ushort
 	baseline    | ushort
 	inner_left  | ushort

@@ -1,5 +1,13 @@
-#include "meshfont.h"
+#include "../fontmesh.h"
 #include "util.h"
+
+#if 0
+#include <stdio.h>
+#endif
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
 #define GET_BE32(buf, off) \
 	(((u32)buf[off] << 24) | ((u32)buf[off+1] << 16) | ((u32)buf[off+2] << 8) | (u32)buf[off+3])
@@ -7,8 +15,8 @@
 #define FOUR_EQUALS(buf, off, str) \
 	(buf[off] == str[0] && buf[off+1] == str[1] && buf[off+2] == str[2] && buf[off+3] == str[3])
 
-struct TTF {
-	int n_glyghs;
+typedef struct {
+	int n_glyphs;
 	int is_loca_32;
 	u32 maxp_offset;
 	u32 maxp_size;
@@ -18,14 +26,14 @@ struct TTF {
 	u32 loca_size;
 	u32 glyf_offset;
 	u32 glyf_size;
-};
+} TTF;
 
 TTF parse_ttf_header(u8 *buf, int size)
 {
 	TTF ttf = {0};
 
 	int idx = 0xc;
-	while (idx < len(buf)) {
+	while (idx < size) {
 		if (!(buf[idx] >= 0x20 && buf[idx] <= 0x7e &&
 			buf[idx+1] >= 0x20 && buf[idx+1] <= 0x7e &&
 			buf[idx+2] >= 0x20 && buf[idx+2] <= 0x7e &&
@@ -55,17 +63,17 @@ TTF parse_ttf_header(u8 *buf, int size)
 	}
 
 	ttf.n_glyphs = (buf[ttf.maxp_offset + 4] << 8) | buf[ttf.maxp_offset + 5];
-	ttf.is_loca_32 = ttf.loca_size >= (self.n_glyphs * 4);
+	ttf.is_loca_32 = ttf.loca_size >= (ttf.n_glyphs * 4);
 
 	return ttf;
 }
 
-u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer& flags)
+u32 render_ttf_glyph(TTF *ttf, u8 *buf, int buf_size, Buffer *mfc, u32 index, BiVector *coords, Buffer *flags)
 {
-	u32 offset = ttf.loca_offset;
-	if (ttf.is_loca_32) {
+	u32 offset = ttf->loca_offset;
+	if (ttf->is_loca_32) {
 		offset += index*4;
-		offset = GET_BE32(buf, pos);
+		offset = GET_BE32(buf, offset);
 	}
 	else {
 		offset += index*2;
@@ -73,7 +81,7 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 		offset *= 2;
 	}
 
-	offset += ttf.glyf_offset;
+	offset += ttf->glyf_offset;
 	int n_contours = (buf[offset] << 8) | buf[offset+1];
 
 	u8 *contour_ends = &buf[offset + 10];
@@ -81,25 +89,25 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 	int n_ins = (contour_ends[2] << 8) | contour_ends[3];
 
 	offset += 12 + (n_contours*2) + n_ins;
-	flags.size = 0;
+	flags->size = 0;
 
 	int j;
-	for (j = 0; j < n_points && flags.size < n_points; j++) {
+	for (j = 0; j < n_points && flags->size < n_points; j++) {
 		u8 b = buf[offset+j];
 		if (b & 8) {
 			j++;
 			int len = 1 + buf[offset+j];
-			u8 *repeated = flags.add(nullptr, len);
+			u8 *repeated = Buffer_add(flags, NULL, len);
 			memset(repeated, b & 0xf7, len);
 		}
 		else {
-			flags.add(&b, 1);
+			Buffer_add(flags, &b, 1);
 		}
 	}
 	offset += j;
 
-	coords.resize(n_points);
-	coords.size = 0;
+	BiVector_resize(coords, n_points);
+	coords->len = 0;
 
 	u32 x_off = offset;
 	u32 y_off = offset;
@@ -113,7 +121,7 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 	int max_y = 0;
 
 	for (j = 0; j < n_points; j++) {
-		u8 f = flags.data()[j];
+		u8 f = flags->data[j];
 
 		dx = 0;
 		if (f & 2) {
@@ -145,7 +153,7 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 		if (j == 0 || y > max_y) max_y = y;
 
 		bool on_curve = (f & 1) != 0;
-		coords.add(x * 2 + on_curve, y);
+		BiVector_add(coords, x * 2 + on_curve, y);
 	}
 
 	int baseline = max_y;
@@ -154,9 +162,18 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 	max_x += add_x;
 	max_y += add_y;
 
+	u16 header[6];
+	header[0] = n_contours;
+	header[1] = baseline;
+	header[2] = min_x + add_x;
+	header[3] = header[2];
+	header[4] = max_x;
+	header[5] = header[4];
+	Buffer_add(mfc, (u8*)&header, 12);
+
 	int start_x;
 	int start_y;
-	coords.get((u32*)&start_x, (u32*)&start_y);
+	BiVector_get(coords, 0, (u32*)&start_x, (u32*)&start_y);
 	start_x = (start_x / 2) + add_x;
 	start_y = max_y - (start_y + add_y);
 
@@ -174,7 +191,7 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 	for (j = 1; j < n_points; j++) {
 		int x;
 		int y;
-		coords.get((u32*)&x, (u32*)&y);
+		BiVector_get(coords, j, (u32*)&x, (u32*)&y);
 		bool on_curve = x & 1;
 		x = (x / 2) + add_x;
 		y = max_y - (y + add_y);
@@ -203,8 +220,8 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 				seg_size = 12;
 			}
 
-			xstart = x;
-			ystart = y;
+			start_x = x;
+			start_y = y;
 			was_on_curve = true;
 			cidx += 1;
 		}
@@ -233,7 +250,7 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 		}
 
 		if (seg_size > 0) {
-			mfc.add((u8*)segment, seg_size);
+			Buffer_add(mfc, (u8*)segment, seg_size);
 			out_size += seg_size;
 		}
 		if (on_curve) {
@@ -265,33 +282,36 @@ u32 render_ttf_glyph(TTF& ttf, Buffer& mfc, u32 index, Bi_Vector& coords, Buffer
 		seg_size = 12;
 	}
 
-	mfc.add((u8*)segment, seg_size);
+	Buffer_add(mfc, (u8*)segment, seg_size);
 	out_size += seg_size;
 
 	return out_size;
 }
 
-Buffer ttf_to_mfc(TTF& ttf, u8 *buf, int buf_size)
+int import_ttf(u8 **out_buf, int *out_size, u8 *in_buf, int in_size)
 {
+	TTF ttf = parse_ttf_header(in_buf, in_size);
+
 	Buffer mfc = {0};
 	if (!ttf.cmap_offset || !ttf.loca_offset || !ttf.glyf_offset)
-		return mfc;
+		return -1;
 
-	u32 offset = cmap_offset;
-	int n_subtables = (buf[offset+2] << 8) | buf[offset+3];
+	u32 offset = ttf.cmap_offset;
+	int n_subtables = (in_buf[offset+2] << 8) | in_buf[offset+3];
 	offset += 4 + n_subtables*8;
 
-	Bi_Vector table;
-	table.reserve(0x1000);
+	BiVector table = {0};
+	BiVector_reserve(&table, 0x400);
 
-	while (offset < cmap_size) {
-		int fmt  = ((int)buf[offset]   << 8) | (int)buf[offset+1];
-		int size = ((int)buf[offset+2] << 8) | (int)buf[offset+3];
+	while (offset < ttf.cmap_offset + ttf.cmap_size) {
+		int fmt  = ((int)in_buf[offset]   << 8) | (int)in_buf[offset+1];
+		int size = ((int)in_buf[offset+2] << 8) | (int)in_buf[offset+3];
 
 		if (fmt == 4) {
-			int segs_x2 = ((int)buf[offset+6] << 8) | (int)buf[offset+7];
+			//printf("Found fmt 4\n");
+			int segs_x2 = ((int)in_buf[offset+6] << 8) | (int)in_buf[offset+7];
 
-			u8 *end_code   = &buf[offset+14];
+			u8 *end_code   = &in_buf[offset+14];
 			u8 *start_code = &end_code[segs_x2+2];
 			u8 *deltas     = &start_code[segs_x2];
 			u8 *range_offs = &deltas[segs_x2];
@@ -308,29 +328,30 @@ Buffer ttf_to_mfc(TTF& ttf, u8 *buf, int buf_size)
 					int n_chars = end - start + 1;
 					for (int j = 0; j < n_chars*2; j += 2) {
 						u16 idx = (extra[j] << 8) | extra[j+1];
-						table.add(j, idx);
+						BiVector_add(&table, j, idx);
 					}
 				}
 				else {
 					for (int j = start; j <= end; j++) {
 						u16 idx = j + delta;
-						table.add(j, idx);
+						BiVector_add(&table, j, idx);
 					}
 				}
 			}
 		}
 		else if (fmt == 12) {
-			size = GET_BE32(buf, offset+4);
-			int n_groups = GET_BE32(buf, offset+12);
+			//printf("Found fmt 12\n");
+			size = GET_BE32(in_buf, offset+4);
+			int n_groups = GET_BE32(in_buf, offset+12);
 			offset += 16;
 
 			for (int i = 0; i < n_groups; i++) {
-				u32 start = GET_BE32(buf, offset);
-				u32 end = GET_BE32(buf, offset+4);
-				u32 base = GET_BE32(buf, offset+8);
+				u32 start = GET_BE32(in_buf, offset);
+				u32 end = GET_BE32(in_buf, offset+4);
+				u32 base = GET_BE32(in_buf, offset+8);
 				u32 n_chars = end - start + 1;
 				for (int j = 0; j < n_chars; j++) {
-					table.add(start + j, base + j);
+					BiVector_add(&table, start + j, base + j);
 				}
 			}
 		}
@@ -338,19 +359,29 @@ Buffer ttf_to_mfc(TTF& ttf, u8 *buf, int buf_size)
 		offset += size;
 	}
 
-	mfc.add(nullptr, table.len * sizeof(u64));
+	Buffer_add(&mfc, NULL, table.len * sizeof(u64));
 	u32 out_offset = mfc.size;
 
-	Buffer flags;
-	Bi_Vector coords;
+	Buffer flags = {0};
+	BiVector coords = {0};
+
+	u64 *table_data = BiVector_data(&table);
 
 	for (int i = 0; i < table.len; i++) {
-		u64 item = table.data()[i];
+		u64 item = table_data[i];
 		u32 id = (u32)item;
-		u32 glyph_size = render_ttf_glyph(ttf, mfc, id, coords, flags);
-		table.data()[i] = ((item >> 32ULL) << 32ULL) | out_offset;
+		u32 glyph_size = render_ttf_glyph(&ttf, in_buf, in_size, &mfc, id, &coords, &flags);
+		table_data[i] = ((item >> 32ULL) << 32ULL) | out_offset;
 		out_offset += glyph_size;
 	}
 
-	memcpy(mfc.data, table.data(), table.len * sizeof(u64));
+	memcpy(mfc.data, table_data, table.len * sizeof(u64));
+	*out_buf = mfc.data;
+	*out_size = mfc.size;
+
+	BiVector_close(&table);
+	BiVector_close(&coords);
+	Buffer_close(&flags);
+
+	return 0;
 }
