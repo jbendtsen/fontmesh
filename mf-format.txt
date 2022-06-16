@@ -1,0 +1,47 @@
+all numbers are little-endian
+uint = 4 bytes, unsigned
+ushort = 2 bytes, unsigned
+
+Character Table:
+	code_point        | uint
+	glyph_file_offset | uint
+Repeats for total number of characters.
+The end of this table is marked by the glyph_file_offset of the first valid character in the table.
+
+Glyph:
+	--padding to align to nearest 4 bytes goes here if necessary--
+	n_shapes    | ushort
+	baseline    | ushort
+	inner_left  | ushort
+	outer_left  | ushort
+	inner_right | ushort
+	outer_right | ushort
+When converting fonts into this format, if a glyph has negative coordinates (including curve points), then the glyph shall be translated in X and Y such that every coordinate is positive or 0.
+
+Shape:
+	start_x  | ushort
+	start_y  | ushort
+	segments | Segment[...]
+The dest_x and dest_y of the last segment are ignored (or more accurately, replaced with start_x and start_y).
+
+Segment:
+	segment_type | ushort | 0 = end of shape, 1 = line segment, 2 = quadratic curve, 3 = cubic curve
+	specifics    | ...
+
+Line Segment:
+	dest_x | ushort
+	dest_y | ushort
+
+Quadratic Curve:
+	dest_x  | ushort
+	dest_y  | ushort
+	joint_x | ushort
+	joint_y | ushort
+
+Cubic Curve:
+	dest_x   | ushort
+	dest_y   | ushort
+	joint_x1 | ushort
+	joint_y1 | ushort
+	joint_x2 | ushort
+	joint_y2 | ushort
